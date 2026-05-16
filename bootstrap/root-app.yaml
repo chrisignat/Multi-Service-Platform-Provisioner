@@ -1,0 +1,23 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-root-app
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/chrisignat/Multi-Service-Platform-Provisioner.git
+    targetRevision: main
+    path: infrastructure 
+    directory:
+      recurse: true 
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - SkipDryRunOnMissingResource=true

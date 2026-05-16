@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: velero-ui
+  namespace: velero
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: velero-ui
+  template:
+    metadata:
+      labels:
+        app: velero-ui
+    spec:
+      serviceAccountName: velero-server 
+      containers:
+        - name: velero-ui
+          image: otwld/velero-ui:latest 
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3000       
+          resources:
+            limits:
+              cpu: 200m
+              memory: 256Mi

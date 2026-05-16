@@ -1,0 +1,53 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: localstack-aws
+  namespace: argocd
+spec:
+  project: default
+  source:
+    chart: localstack
+    repoURL: https://localstack.github.io/helm-charts
+    targetRevision: 0.6.14
+    helm:
+      values: |
+        image:
+          repository: localstack/localstack
+          tag: 2026.04.0
+          pullPolicy: Always        
+        persistence:
+          enabled: true
+          size: 5Gi
+          mountPath: /var/lib/localstack
+        extraEnvVars:
+          - name: PERSISTENCE
+            value: "1"
+          - name: SNAPSHOT_SAVE_STRATEGY
+            value: "ON_REQUEST"
+          - name: LOCALSTACK_PERSISTENCE_DIR
+            value: "/var/lib/localstack"
+          - name: LOCALSTACK_AUTH_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: localstack-secrets
+                key: auth-token
+          - name: SERVICES
+            value: "s3,sqs,lambda,sns,dynamodb,ec2,iam"
+          - name: DOCKER_HOST
+            value: unix:///var/run/docker.sock        
+        volumes:
+          - name: docker-sock
+            hostPath:
+              path: /var/run/docker.sock
+        volumeMounts:
+          - name: docker-sock
+            mountPath: /var/run/docker.sock
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: localstack
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+     - CreateNamespace=true

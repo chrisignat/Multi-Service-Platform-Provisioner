@@ -1,0 +1,334 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: self-service-postgres-
+spec:
+  serviceAccountName: argo-workflow-manager
+  entrypoint: main-pipeline
+  hostAliases:
+  - ip: "192.168.1.6" #<---- Change the IP with your local IP!
+    hostnames:
+    - "localstack.local"
+
+  arguments:
+    parameters:
+    - name: target-namespace
+      value: "postgres-test"
+    - name: postgres-version
+      value: "15.0"
+  templates:
+  - name: main-pipeline
+    dag:
+      tasks:
+      
+      - name: security-scan
+        template: trivy-scan
+        arguments:
+          parameters: [{name: version, value: "{{workflow.parameters.postgres-version}}"}]
+
+      - name: create-namespace
+        dependencies: [security-scan]
+        template: namespace-manager
+        arguments:
+          parameters: [{name: namespace, value: "{{workflow.parameters.target-namespace}}"}]
+
+      - name: generate-random-credentials
+        dependencies: [security-scan]
+        template: credential-gen
+
+      - name: deploy-postgresql
+        dependencies: [create-namespace, generate-random-credentials]
+        template: k8s-statefulset
+        arguments:
+          parameters: 
+          - name: db-password
+            value: "{{tasks.generate-random-credentials.outputs.parameters.db-password}}"
+          - name: namespace
+            value: "{{workflow.parameters.target-namespace}}"
+          - name: version
+            value: "{{workflow.parameters.postgres-version}}"
+
+      - name: deploy-service
+        dependencies: [deploy-postgresql]
+        template: k8s-service
+        arguments:
+          parameters: 
+          - name: namespace
+            value: "{{workflow.parameters.target-namespace}}"
+
+      - name: build-pdfs
+        dependencies: [deploy-service, generate-random-credentials]
+        template: pdf-generator
+        arguments:
+          parameters:
+          - name: db-password
+            value: "{{tasks.generate-random-credentials.outputs.parameters.db-password}}"
+          - name: scan-data
+            value: "{{tasks.security-scan.outputs.parameters.scan-report}}"
+          - name: namespace
+            value: "{{workflow.parameters.target-namespace}}"
+          - name: version
+            value: "{{workflow.parameters.postgres-version}}"
+
+  # --- Templates ---
+
+  - name: trivy-scan
+    inputs:
+      parameters: [{name: version}]
+    container:
+      image: aquasec/trivy:latest
+      command: ["sh", "-c"]
+      args: 
+        - |
+          apk add --no-cache jq
+          trivy image --severity CRITICAL --quiet --format json postgres:{{inputs.parameters.version}} | jq -r '.Results[0].Vulnerabilities[]? | "\(.VulnerabilityID)  |  \(.PkgName)"' | head -n 10 > /tmp/scan.txt || true
+          if [ ! -s /tmp/scan.txt ]; then echo "No CRITICAL vulnerabilities found." > /tmp/scan.txt; fi
+    outputs:
+      parameters:
+      - name: scan-report
+        valueFrom: {path: /tmp/scan.txt}
+
+  - name: namespace-manager
+    inputs:
+      parameters: [{name: namespace}]
+    resource:
+      action: apply
+      manifest: |
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: "{{inputs.parameters.namespace}}"
+
+  - name: credential-gen
+    container:
+      image: python:3.9-slim
+      command: ["python3", "-c"]
+      args: 
+        - |
+          import secrets, string
+          password = ''.join(secrets.choice(string.ascii_letters + string.digits) for i in range(16))
+          with open("/tmp/pass.txt", "w") as f: f.write(password)
+    outputs:
+      parameters:
+      - name: db-password
+        valueFrom: {path: /tmp/pass.txt}
+
+  - name: k8s-statefulset
+    inputs:
+      parameters: [{name: db-password}, {name: namespace}, {name: version}]
+    resource:
+      action: apply
+      manifest: |
+        apiVersion: apps/v1
+        kind: StatefulSet
+        metadata:
+          name: postgres-sts
+          namespace: {{inputs.parameters.namespace}}
+        spec:
+          serviceName: postgres-svc
+          replicas: 2
+          selector:
+            matchLabels:
+              app: postgres
+          template:
+            metadata:
+              labels:
+                app: postgres
+            spec:
+              securityContext:
+                fsGroup: 999
+              initContainers:
+              - name: fix-permissions
+                image: busybox
+                command: ["sh", "-c", "chown -R 999:999 /var/lib/postgresql"]
+                volumeMounts:
+                - name: pg-data
+                  mountPath: /var/lib/postgresql
+              containers:
+              - name: postgres
+                image: "postgres:{{inputs.parameters.version}}"
+                ports:
+                - containerPort: 5432
+                env:
+                - name: POSTGRES_PASSWORD
+                  value: "{{inputs.parameters.db-password}}"
+                readinessProbe:
+                  exec:
+                    command: ["pg_isready", "-U", "postgres"]
+                  initialDelaySeconds: 5
+                  periodSeconds: 10
+                volumeMounts:
+                - name: pg-data
+                  mountPath: /var/lib/postgresql
+          volumeClaimTemplates:
+          - metadata:
+              name: pg-data
+            spec:
+              accessModes: [ "ReadWriteOnce" ]
+              resources:
+                requests:
+                  storage: 20Gi
+
+  - name: k8s-service
+    inputs:
+      parameters: [{name: namespace}]
+    resource:
+      action: apply
+      manifest: |
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: postgres-svc
+          namespace: "{{inputs.parameters.namespace}}"
+        spec:
+          type: LoadBalancer
+          externalIPs:
+          - 192.168.1.6 # <---Change the IP with your local IP!
+          ports:
+          - port: 5432
+            targetPort: 5432
+          selector:
+            app: postgres
+
+  - name: pdf-generator
+    inputs:
+      parameters:
+      - name: db-password
+      - name: scan-data
+      - name: namespace
+      - name: version
+    container:
+      image: python:3.9-slim
+      command: ["/bin/bash", "-c"]
+      args:
+        - |
+          apt-get update && apt-get install -y fonts-dejavu-core
+          pip install fpdf2
+          
+          python3 - <<EOF
+          from fpdf import FPDF
+          import os
+
+          class StyledPDF(FPDF):
+              def __init__(self):
+                  super().__init__()
+                  self.add_font('DejaVu', '', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf')
+                  self.add_font('DejaVu', 'B', '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf')
+
+              def create_header(self, title, subtitle, color):
+                  self.add_page()
+                  self.set_fill_color(*color)
+                  self.set_text_color(255, 255, 255)
+                  self.set_font("DejaVu", 'B', 16)
+                  self.cell(0, 15, f' {title} ', fill=True, align='C', ln=True)
+                  if subtitle:
+                      self.set_font("DejaVu", '', 12)
+                      darker_color = tuple(max(0, c - 30) for c in color)
+                      self.set_fill_color(*darker_color)
+                      self.cell(0, 10, f' {subtitle} ', fill=True, align='C', ln=True)
+                  self.ln(8)
+                  self.set_text_color(0, 0, 0)
+
+          # --- 1. DEVELOPER PDF ---
+          dev = StyledPDF()
+          dev.create_header("Database Access Card", "Local Ingress Environment", (52, 152, 219))
+          
+          dev.set_font("DejaVu", 'B', 14)
+          dev.set_text_color(41, 128, 185)
+          dev.cell(0, 10, "Connection Details", ln=True)
+          dev.set_text_color(0, 0, 0)
+          
+          lines = [
+              ("Host:", "postgres.local"),
+              ("Port:", "5432"),
+              ("User:", "postgres"),
+              ("Pass:", "{{inputs.parameters.db-password}}"),
+              ("DB:", "postgres")
+          ]
+          
+          dev.set_font("DejaVu", '', 11)
+          fill = False
+          for label, val in lines:
+              dev.set_fill_color(240, 248, 255) if fill else dev.set_fill_color(255, 255, 255)
+              dev.set_font("DejaVu", 'B', 11)
+              dev.cell(40, 10, f"  {label}", fill=fill)
+              dev.set_font("DejaVu", '', 11)
+              dev.cell(0, 10, f"{val}", fill=fill, ln=True)
+              fill = not fill
+
+          dev.ln(8)
+          dev.set_font("DejaVu", 'B', 14)
+          dev.set_text_color(41, 128, 185)
+          dev.cell(0, 10, "Python Connection Snippet", ln=True)
+          dev.set_text_color(0, 0, 0)
+          
+          
+          code = "import psycopg2\n\nconn = psycopg2.connect(\n    host='postgres.local',\n    port='5432',\n    user='postgres',\n    password='{{inputs.parameters.db-password}}',\n    dbname='postgres'\n)"
+          dev.set_fill_color(40, 44, 52)
+          dev.set_text_color(171, 178, 191)
+          dev.set_font("courier", size=10)
+          dev.multi_cell(0, 6, code, fill=True)
+
+          dev.ln(10)
+          dev.set_fill_color(231, 76, 60)
+          dev.set_text_color(255, 255, 255)
+          dev.set_font("DejaVu", 'B', 11)
+          dev.cell(0, 10, " REQUIRED ONE-TIME SETUP ", fill=True, ln=True, align='C')
+          dev.set_text_color(0, 0, 0)
+          dev.set_font("DejaVu", '', 10)
+          dev.multi_cell(0, 6, "Add the line '127.0.0.1 postgres.local' to your /etc/hosts file (Linux/Mac) or C:\\Windows\\System32\\drivers\\etc\\hosts (Windows).")
+          dev.output("/tmp/developer-report.pdf")
+
+          # --- 2. DEVOPS PDF ---
+          ops = StyledPDF()
+          ops.create_header("Compliance & Security Report", "Infrastructure Overview", (44, 62, 80))
+          
+          ops.set_font("DejaVu", 'B', 14)
+          ops.set_text_color(44, 62, 80)
+          ops.cell(0, 10, "Deployment Info", ln=True)
+          ops.set_text_color(0, 0, 0)
+          
+          ops.set_font("DejaVu", '', 11)
+          ops.cell(0, 8, "Namespace: {{inputs.parameters.namespace}}", ln=True)
+          ops.cell(0, 8, "Storage: 20Gi PVC", ln=True)
+          ops.cell(0, 8, "Image: postgres:{{inputs.parameters.version}}", ln=True)
+          
+          # ---3. COST ESTIMATION --- 
+          ops.ln(8)
+          ops.set_font("DejaVu", 'B', 14)
+          ops.set_text_color(192, 57, 43)
+          ops.cell(0, 10, "Security Vulnerabilities", ln=True)
+          ops.set_text_color(0, 0, 0)
+          scan_data = """{{inputs.parameters.scan-data}}"""
+          ops.set_font("courier", size=9)
+          ops.set_fill_color(250, 240, 240)
+          ops.multi_cell(0, 6, scan_data, fill=True)
+          
+          ops.output("/tmp/devops-report.pdf")
+          EOF
+    outputs:
+      artifacts:
+      - name: dev-pdf
+        path: /tmp/developer-report.pdf
+        archive:
+          none: {}
+        s3:
+          endpoint: localstack.local
+          bucket: postgres-pdf
+          key: "reports/{{workflow.name}}/developer-info.pdf"
+          insecure: true
+          forcePathStyle: true
+          accessKeySecret: {name: my-s3-credentials, key: accessKey}
+          secretKeySecret: {name: my-s3-credentials, key: secretKey}
+      - name: ops-pdf
+        path: /tmp/devops-report.pdf
+        archive:
+          none: {}
+        s3:
+          endpoint: localstack.local
+          bucket: postgres-pdf
+          key: "reports/{{workflow.name}}/devops-metrics.pdf"
+          insecure: true
+          forcePathStyle: true
+          accessKeySecret: {name: my-s3-credentials, key: accessKey}
+          secretKeySecret: {name: my-s3-credentials, key: secretKey}

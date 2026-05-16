@@ -1,0 +1,54 @@
+name: DevSecOps Comprehensive Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  security-scan:
+    name: Security & IaC Scanning
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 1. Semgrep SAST (Static Analysis)
+      - name: Semgrep SAST
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: >-
+            p/security-audit
+            p/secrets
+        continue-on-error: true
+
+      # 2. Checkov IaC Scan (Kubernetes manifests)
+      - name: Checkov IaC Scan
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: .
+          framework: kubernetes
+          output_format: sarif
+          output_file_path: checkov.sarif
+          soft_fail: true
+
+      # 3. Trivy Config Scan (Misconfigurations)
+      - name: Trivy Config Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          directory: '.'
+          format: 'sarif'
+          output: 'trivy-config.sarif'
+        continue-on-error: true
+
+      
+      - name: Upload Security Results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: .

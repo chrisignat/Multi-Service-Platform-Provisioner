@@ -1,0 +1,43 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kubecost
+  namespace: argocd
+spec:
+  project: default
+  source:
+    chart: cost-analyzer
+    repoURL: https://kubecost.github.io/cost-analyzer/
+    targetRevision: 2.2.0
+    helm:
+      values: |
+        kubecostProductConfigs:
+          clusterName: multi-service-platform
+          prometheusExternalUrl: http://monitoring-kube-prometheus-prometheus.monitoring.svc:9090
+          prometheusMgmtApiEndpoint: http://monitoring-kube-prometheus-prometheus.monitoring.svc:9090
+          customPricingEnabled: true
+          currencyCode: "EUR"
+     
+        prometheus:
+          enabled: false
+          fqdn: http://monitoring-kube-prometheus-prometheus.monitoring.svc:9090
+        
+        kubecostModel:
+          promClusterSelected: true
+        
+        grafana:
+          enabled: false 
+
+        serviceMonitor:
+          enabled: true
+          additionalLabels:
+            release: monitoring
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kubecost
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
