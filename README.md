@@ -279,10 +279,10 @@ kubectl get pods -A
 kubectl logs -n <namespace> <pod-name>
 ```
 
-### Verify Ingress
+### Argo Is not Accessible (404 error)
 
 ```bash
-kubectl get ingress -A
+make ingress
 ```
 
 ### Test DNS Resolution
