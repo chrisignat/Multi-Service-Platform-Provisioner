@@ -9,18 +9,18 @@ help:
 CLUSTER_NAME="multi-service-platform"
 
 cluster:
-	@echo "🎯 Set up Docker Desktop..."
+	@echo "Set up Docker Desktop..."
 	kubectl config use-context docker-desktop
-	@echo "📦 Creating namespaces..."
+	@echo "Creating namespaces..."
 	kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
 	kubectl create namespace argo --dry-run=client -o yaml | kubectl apply -f -
-	@echo "📥 Installing ArgoCD Server-Side..."
+	@echo "Installing ArgoCD Server-Side..."
 	kubectl apply --server-side -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
-	@echo "📥 Argo Workflow Installing..."
+	@echo "Argo Workflow Installing..."
 	kubectl apply -f https://github.com/argoproj/argo-workflows/releases/download/v3.5.0/install.yaml
-	@echo "🌐 Installing Nginx Ingress (Docker Desktop version)..."
+	@echo "Installing Nginx Ingress (Docker Desktop version)..."
 	kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/cloud/deploy.yaml
-	@echo "🚀 Bootstrapping root application..."
+	@echo "Bootstrapping root application..."
 	kubectl apply -f bootstrap/root-app.yaml
 
 argo-password:
