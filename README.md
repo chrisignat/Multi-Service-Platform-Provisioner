@@ -27,8 +27,9 @@ The platform is under **active daily development**, continuously evolving with n
 10. [🚦 Local Access & Requirements](#-local-access--requirements)
 11. [🛠️ Troubleshooting](#-troubleshooting)
 12. [📂 Repository Structure](#-repository-structure)
-13. [🤝 Contributing](#-contributing)
-14. [🔮 Future Improvements](#-future-improvements)
+13. [📺 Live Demo & Platform Walkthrough](#-demo-video)
+14. [🤝 Contributing](#-contributing)
+15. [🔮 Future Improvements](#-future-improvements)
 
 ---
 ## ⚙️ Setup & Installation
@@ -366,7 +367,13 @@ Increase Docker Desktop memory allocation:
 | `terraform/` | IaC modules for Cloud & LocalStack provisioning |
 
 ---
+## 📺 Live Demo & Platform Walkthrough
 
+<div align="center">
+  <video src="https://github.com/user-attachments/assets/3a9b1e7a-1148-4a5a-b13b-d95b4f2f7496" width="700" autoplay loop muted playsinline></video>
+</div>
+
+---
 ## 🤝 Contributing
 Contributions, ideas, and bug fixes are highly welcome! If you want to help improve this platform, please feel free to open an Issue or submit a Pull Request on GitHub.
 
